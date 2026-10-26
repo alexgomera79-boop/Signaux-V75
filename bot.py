@@ -27,7 +27,11 @@ NAME = "Volatility 75 Index"
 SYMBOL = "R_75"
 GRANULARITY = 3600        # secondes : 3600 = bougies H1
 COUNT = 500               # nombre de bougies téléchargées
-WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+WS_URLS = [
+    "wss://ws.derivws.com/websockets/v3?app_id=1089",
+    "wss://ws.binaryws.com/websockets/v3?app_id=1089",
+    "wss://ws.deriv.com/websockets/v3?app_id=1089",
+]
 EMA_FAST, EMA_SLOW = 20, 50
 RSI_PERIOD = 14
 ATR_PERIOD = 14
@@ -61,23 +65,45 @@ def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / n, adjust=False).mean()
 
 
-def fetch() -> pd.DataFrame:
-    """Télécharge les bougies H1 du V75 (la bougie en cours est retirée)."""
+def _download() -> dict:
+    """Interroge l'API Deriv ; essaie plusieurs adresses, avec une nouvelle tentative."""
+    import time
+
     import websocket  # paquet "websocket-client"
 
-    ws = websocket.create_connection(WS_URL, timeout=20)
-    try:
-        ws.send(json.dumps({
-            "ticks_history": SYMBOL,
-            "end": "latest",
-            "count": COUNT,
-            "style": "candles",
-            "granularity": GRANULARITY,
-        }))
-        data = json.loads(ws.recv())
-    finally:
-        ws.close()
+    request = json.dumps({
+        "ticks_history": SYMBOL,
+        "end": "latest",
+        "count": COUNT,
+        "style": "candles",
+        "granularity": GRANULARITY,
+    })
+    last_error = None
+    for url in WS_URLS:
+        for attempt in range(2):
+            try:
+                ws = websocket.create_connection(
+                    url,
+                    timeout=20,
+                    origin="https://app.deriv.com",
+                    header=["User-Agent: Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"],
+                )
+                try:
+                    ws.send(request)
+                    return json.loads(ws.recv())
+                finally:
+                    ws.close()
+            except Exception as e:
+                last_error = e
+                print(f"  essai échoué ({url}) : {e}")
+                time.sleep(3)
+    raise RuntimeError(f"connexion à Deriv impossible : {last_error}")
 
+
+def fetch() -> pd.DataFrame:
+    """Télécharge les bougies H1 du V75 (la bougie en cours est retirée)."""
+    data = _download()
     if "error" in data:
         raise RuntimeError(data["error"].get("message", "erreur Deriv"))
     candles = data.get("candles") or []
@@ -186,4 +212,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-        
