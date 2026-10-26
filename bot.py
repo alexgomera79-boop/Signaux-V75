@@ -28,9 +28,9 @@ SYMBOL = "R_75"
 GRANULARITY = 3600        # secondes : 3600 = bougies H1
 COUNT = 500               # nombre de bougies téléchargées
 WS_URLS = [
-    "wss://ws.derivws.com/websockets/v3?app_id=1089",
-    "wss://ws.binaryws.com/websockets/v3?app_id=1089",
-    "wss://ws.deriv.com/websockets/v3?app_id=1089",
+    "wss://api.derivws.com/trading/v1/options/ws/public",   # nouvelle API publique de Deriv
+    "wss://ws.derivws.com/websockets/v3?app_id=1089",        # ancienne adresse (secours)
+    "wss://ws.binaryws.com/websockets/v3?app_id=1089",       # ancienne adresse (secours)
 ]
 EMA_FAST, EMA_SLOW = 20, 50
 RSI_PERIOD = 14
@@ -80,15 +80,15 @@ def _download() -> dict:
     })
     last_error = None
     for url in WS_URLS:
-        for attempt in range(2):
+        # 1re tentative sans en-têtes particuliers, 2e avec une identité de navigateur
+        for browser in (False, True):
             try:
-                ws = websocket.create_connection(
-                    url,
-                    timeout=20,
-                    origin="https://app.deriv.com",
-                    header=["User-Agent: Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"],
-                )
+                opts = {"timeout": 20}
+                if browser:
+                    opts["origin"] = "https://app.deriv.com"
+                    opts["header"] = ["User-Agent: Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+                                      "(KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"]
+                ws = websocket.create_connection(url, **opts)
                 try:
                     ws.send(request)
                     return json.loads(ws.recv())
@@ -96,8 +96,8 @@ def _download() -> dict:
                     ws.close()
             except Exception as e:
                 last_error = e
-                print(f"  essai échoué ({url}) : {e}")
-                time.sleep(3)
+                print(f"  essai échoué ({url.split('?')[0]}, navigateur={browser}) : {str(e)[:120]}")
+                time.sleep(2)
     raise RuntimeError(f"connexion à Deriv impossible : {last_error}")
 
 
@@ -108,6 +108,7 @@ def fetch() -> pd.DataFrame:
         raise RuntimeError(data["error"].get("message", "erreur Deriv"))
     candles = data.get("candles") or []
     if not candles:
+        print(f"Réponse inattendue de Deriv : {str(data)[:300]}")
         return pd.DataFrame()
 
     df = pd.DataFrame(candles)
@@ -212,3 +213,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+  
